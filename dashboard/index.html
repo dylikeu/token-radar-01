@@ -3,12 +3,102 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Token Radar: pre-token protocols ranked by implied value</title>
+<title>Token Radar v2 — pre-token protocols ranked by implied value</title>
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
-<a class="skip" href="#board">Skip to the board</a>
-<main id="board" tabindex="-1" aria-busy="true"></main>
+<header class="top">
+  <p class="eyebrow">make.fun &middot; token-radar-01 &middot; v2 &middot; snapshot <span id="asof">—</span></p>
+  <h1>Token Radar</h1>
+  <p class="lede">Every protocol that <strong>records no token</strong>, ranked by what its launch
+  would be worth — and exactly what to do to farm it first. Implied value is this
+  entry&rsquo;s own claim, computed from the snapshot&rsquo;s numbers, never a guess.</p>
+</header>
+
+<section class="stats" aria-label="Coverage">
+  <div class="stat"><b id="stat-scanned">—</b><span>protocols scanned</span></div>
+  <div class="stat"><b id="stat-pretoken">—</b><span>record no token</span></div>
+  <div class="stat"><b id="stat-watch">—</b><span>on the watchlist</span></div>
+  <div class="stat"><b id="stat-rows">—</b><span>ranked on this board</span></div>
+  <div class="stat"><b id="stat-total">—</b><span>total implied value</span></div>
+</section>
+
+<section class="model" aria-label="How the value is scored">
+  <h2>How the value is scored</h2>
+  <p><code>impliedValue(tvl, growth7d, monthsNoToken, chainCount)</code> — TVL times a
+  size multiple (0.55 under $100m, 0.38 to $1b, 0.26 above), times a growth factor from
+  the 7-day TVL change, times an age factor of +1.8% per month with no token recorded
+  (capped at 36 months), times a breadth factor of +1.2% per chain (capped at 12).
+  No name is ever scored by hand: the same four numbers always give the same value.
+  Pick any row to see its four factors. Board eligibility follows the snapshot&rsquo;s own
+  watchlist rule: no CEX, bridge, liquid (re)staking or restaked-BTC product, no
+  versioned or wrapped/staked name, no exchange-named protocol — an exchange&rsquo;s
+  balances are not a launch waiting to happen.</p>
+</section>
+
+<section class="controls" aria-label="Filter and sort">
+  <label>Search <input id="q" type="search" placeholder="name or slug…" autocomplete="off"></label>
+  <label>Status
+    <select id="status">
+      <option value="all">All ranked</option>
+      <option value="watchlist">Watchlist only</option>
+      <option value="early">Early pre-token</option>
+    </select>
+  </label>
+  <label>Category <select id="category"><option value="all">All categories</option></select></label>
+  <label>Chain <select id="chain"><option value="all">All chains</option></select></label>
+  <label>Sort by
+    <select id="sort">
+      <option value="rank">Rank (implied value)</option>
+      <option value="tvl">TVL, high to low</option>
+      <option value="growth">7-day growth</option>
+      <option value="months">Months, no token</option>
+      <option value="cost">Farm cost, low to high</option>
+    </select>
+  </label>
+  <button id="reset" type="button">Reset</button>
+  <p id="count" class="count" aria-live="polite"></p>
+</section>
+
+<main>
+  <table class="board" id="board">
+    <thead><tr>
+      <th><button data-sort="rank" type="button">#</button></th>
+      <th><button data-sort="name" type="button">Protocol</button></th>
+      <th>Status</th>
+      <th>Category</th>
+      <th>Chains</th>
+      <th><button data-sort="tvl" type="button">TVL</button></th>
+      <th><button data-sort="growth" type="button">7d</button></th>
+      <th><button data-sort="months" type="button">Mo. no token</button></th>
+      <th><button data-sort="value" type="button">Implied value</button></th>
+      <th><button data-sort="cost" type="button">Farm cost</button></th>
+    </tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <p class="hint">Click any row for its detail view: the four value factors and its 7-step farm plan.</p>
+
+  <section id="detail" class="detail" hidden aria-label="Protocol detail"></section>
+
+  <section class="comps" aria-label="Traded comparables">
+    <h2>Already trading — not ranked</h2>
+    <p>These protocols record a token that already trades, so they are <strong>not</strong> on
+    the board and carry no rank. They are here only as valuation comparables: what the
+    market already pays per dollar of TVL.</p>
+    <table class="board comps-table">
+      <thead><tr><th>Protocol</th><th>Token</th><th>Market cap</th><th>TVL</th><th>Mcap / TVL</th></tr></thead>
+      <tbody id="comps"></tbody>
+    </table>
+  </section>
+</main>
+
+<footer>
+  <p><strong>Read this before you farm.</strong> &ldquo;Records no token&rdquo; means the
+  snapshot&rsquo;s DefiLlama record carries no token — it is not proof a protocol has none.
+  A launch is never promised, an implied value is not a price, and every farm plan
+  below is sized at $50–$200 per step: never deposit more than you can afford to lose.
+  Data: DefiLlama protocols snapshot, frozen at the date above. This page needs no network.</p>
+</footer>
 <script src="../data.js"></script>
 <script src="app.js"></script>
 </body>
