@@ -1,42 +1,63 @@
-# Token Radar v2 — pre-token protocols ranked by implied value
+# Token Launch Radar — v3
 
-[![make.fun](https://make.fun/badge/token-radar-01.svg)](https://make.fun/bounty/token-radar-01)
+[![make.fun bounty](https://make.fun/badge/token-radar-01.svg)](https://make.fun/bounty/token-radar-01)
 [![rank](https://make.fun/badge/token-radar-01/dylikeu/token-radar-01/rank.svg)](https://make.fun/bounty/token-radar-01)
 [![reward](https://make.fun/badge/token-radar-01/dylikeu/token-radar-01/reward.svg)](https://make.fun/bounty/token-radar-01)
 
-Token Radar v2 reads a frozen DefiLlama snapshot of 758 protocols, finds the ones
-that record no token, and ranks 197 of them by an implied launch value computed
-from their own numbers — TVL, 7-day growth, months run with no token, and chain
-breadth — with a concrete 7-step farm plan (cost and time on every step) for each.
-The dashboard is a static page: sortable, filterable, with a detail view per
-protocol that shows the four value factors and recomputes the value live, plus a
-separate table of already-trading protocols shown only as valuation comparables.
+Every protocol in the snapshot that records no token — all 342 of them, the
+40-protocol watchlist included — ranked by an implied value that is **fitted
+from the snapshot's own traded protocols**, not a hand-picked multiple.
+
+## The model
+
+`fitCompsCurve` (in `lib/radar.ts`) regresses log market cap on log TVL, its
+square, clamped 7-day growth, log age since listing, and one dummy per
+category with at least five traded comps, ridge-regularised (λ = 3). It trains
+on the snapshot's 128 traded protocols at run time; no coefficient is chosen
+by hand and no protocol name is ever special-cased.
+
+`impliedValueFromComps` prices each pre-token protocol from that curve and
+gives a P10–P90 range from the fit's residual spread. `tokenOddsByAge` gives
+the empirical share of protocols that record a token in each age-since-listing
+bucket. The verdict is expected value — implied value × token odds — under the
+rule stated on the dashboard: FARM at $15,000,000 or more, THIN at $3,000,000 or
+more, otherwise SKIP.
+
+`validateCompsFit` checks the fit two ways and the dashboard shows both:
+a held-out fifth of traded comps (every 5th by slug) and leave-one-out refits
+over all comps. On this snapshot the fit reports R² 0.256, a held-out median
+error of 74.5% and a leave-one-out median error of 87.6% — wide, and the
+dashboard says so plainly instead of hiding it behind a point estimate.
+
+## Farm plans
+
+`buildFarmPlan` derives seven steps per protocol from its own record —
+category picks the action verb (vault deposit, LP, lending supply+borrow,
+staking, bridging, perps margin, and so on), the primary chain picks where,
+the TVL tier picks the deposit size, age picks the hold window, and 7-day
+growth picks the urgency. Every step states a cost in dollars and a time,
+and the protocol's name appears in every step.
 
 ## Run it
 
 ```sh
-mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input /path/to/snapshot.json
+mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input path/to/snapshot.json
 ```
 
-Node 22 or later, standard library only, no network. `main.ts` writes
-`board.json`, `data.js`, `dashboard/`, `screenshots/` and `dossier.json` into the
-output directory. Open `out/dashboard/index.html` in a browser to use the radar.
+`main.ts` reads the snapshot, writes `board.json` (342 rows) and `data.js`
+from the same in-memory rows, copies `dashboard/` and `screenshots/` to the
+output, and writes `dossier.json` with `buildDossier` from
+`vendor/makefun-board.ts`. Node 22, standard library only, no network, and
+two runs write byte-identical output.
 
-## The model
+## Layout
 
-`impliedValue(tvl, growth7d, monthsNoToken, chainCount)` in `lib/radar.ts`
-(and mirrored in `dashboard/app.js`): TVL times a size multiple (0.55 under
-$100m, 0.38 to $1b, 0.26 above), times a growth factor from the 7-day TVL change,
-times an age factor of +1.8% per month with no token recorded (capped at 36
-months), times a breadth factor of +1.2% per chain (capped at 12). No protocol
-is ranked by name. Board eligibility follows the snapshot's own watchlist rule
-(no CEX, bridge, liquid (re)staking or restaked-BTC product, no versioned or
-wrapped/staked name, no exchange-named protocol). The board covers the full
-40-protocol watchlist, plus every other eligible pre-token protocol.
+- `main.ts` — entrypoint
+- `lib/radar.ts` — snapshot parsing, the fitted comps model, token odds, farm plans, board building
+- `vendor/makefun-board.ts` — make.fun's dossier library, as shipped in the kit
+- `dashboard/` — the page: `index.html`, `app.css`, `app.js`
+- `screenshots/` — board, detail and filtered views
 
-## Bounty
-
-Built for [token-radar-01 on make.fun](https://make.fun/bounty/token-radar-01)
-— $1,325, closes 14 Dec 2026 10:00 UTC. Implied values are this entry's own
-claim, never make.fun's; "records no token" means the snapshot's record carries
-no token, not proof a protocol has none.
+MIT licensed. A protocol "records no token" when its market cap, CoinGecko id
+and symbol are all null in the snapshot — that is not proof it has none.
+Nothing here is investment advice.
