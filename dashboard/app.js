@@ -1,251 +1,186 @@
-/* Token Radar v2 — the page.
- *
- * Data arrives as window.RADAR (written by main.ts from the same board as
- * board.json). The value model lives here too, as impliedValue, and the
- * detail view recomputes every row's value from the row's own numbers, so
- * the page and the board cannot disagree: the judge can read the function
- * and check the number beside it.
- */
+// Token Launch Radar — renders window.RADAR (written by main.ts from the
+// same rows as board.json) into a sortable, filterable board with a detail
+// view per protocol. No network: every number on the page comes from RADAR.
+(function () {
+  var R = window.RADAR;
+  if (!R) return;
 
-'use strict';
-
-/**
- * impliedValue(tvl, growth7d, monthsNoToken, chainCount) — the model's one
- * function, mirrored from the builder. TVL times a size multiple (0.55
- * under $100m, 0.38 to $1b, 0.26 above), times a growth factor from the
- * 7-day TVL change, times an age factor of +1.8% per month with no token
- * recorded (capped at 36 months), times a breadth factor of +1.2% per
- * chain (capped at 12). Same four numbers in, same value out — no name
- * is ever scored by hand.
- */
-function impliedValue(tvl, growth7d, monthsNoToken, chainCount) {
-  var multiple = tvl < 100000000 ? 0.55 : tvl < 1000000000 ? 0.38 : 0.26;
-  var g = growth7d === null || growth7d === undefined ? 0 : Math.max(-50, Math.min(120, growth7d));
-  var growth = Math.max(0.7, Math.min(1.6, 1 + (g / 100) * 0.6));
-  var age = 1 + 0.018 * Math.min(Math.max(0, monthsNoToken), 36);
-  var breadth = 1 + 0.012 * Math.min(Math.max(0, chainCount), 12);
-  return {
-    value: Math.max(1, Math.round(tvl * multiple * growth * age * breadth)),
-    breakdown: { multiple: multiple, growth_factor: growth, age_factor: age, breadth_factor: breadth },
-  };
-}
-
-var DATA = window.RADAR || { meta: {}, rows: [], comparables: [] };
-var ROWS = DATA.rows || [];
-var BY_SLUG = {};
-ROWS.forEach(function (r) { BY_SLUG[r.slug] = r; });
-
-/* ------------------------------------------------------------ formatting */
-
-function money(n) {
-  if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
-  if (n >= 1e6) return '$' + (n / 1e6).toFixed(1) + 'M';
-  if (n >= 1e3) return '$' + (n / 1e3).toFixed(0) + 'K';
-  return '$' + Math.round(n);
-}
-
-function pct(g) {
-  if (g === null || g === undefined) return '—';
-  return (g > 0 ? '+' : '') + g.toFixed(1) + '%';
-}
-
-function esc(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-/* ------------------------------------------------------------ state */
-
-var state = { q: '', status: 'all', category: 'all', chain: 'all', sort: 'rank', selected: null };
-
-var $ = function (id) { return document.getElementById(id); };
-
-function fillSelect(id, values) {
-  var el = $(id);
-  values.forEach(function (v) {
-    var o = document.createElement('option');
-    o.value = v;
-    o.textContent = v;
-    el.appendChild(o);
-  });
-}
-
-var CATEGORIES = [];
-var CHAINS = [];
-ROWS.forEach(function (r) {
-  if (CATEGORIES.indexOf(r.category) < 0) CATEGORIES.push(r.category);
-  r.chains.forEach(function (c) { if (CHAINS.indexOf(c) < 0) CHAINS.push(c); });
-});
-CATEGORIES.sort();
-CHAINS.sort();
-
-function sortRows(list) {
-  var copy = list.slice();
-  var key = state.sort;
-  if (key === 'tvl') copy.sort(function (a, b) { return b.tvl_usd - a.tvl_usd; });
-  else if (key === 'growth') copy.sort(function (a, b) { return (b.change_7d || 0) - (a.change_7d || 0); });
-  else if (key === 'months') copy.sort(function (a, b) { return b.months_no_token - a.months_no_token; });
-  else if (key === 'cost') copy.sort(function (a, b) { return a.farm_cost_usd - b.farm_cost_usd; });
-  else if (key === 'name') copy.sort(function (a, b) { return a.name < b.name ? -1 : 1; });
-  else if (key === 'value') copy.sort(function (a, b) { return b.implied_value_usd - a.implied_value_usd; });
-  else copy.sort(function (a, b) { return a.rank - b.rank; });
-  return copy;
-}
-
-function filteredRows() {
-  var q = state.q.trim().toLowerCase();
-  return ROWS.filter(function (r) {
-    if (state.status !== 'all' && r.status !== state.status) return false;
-    if (state.category !== 'all' && r.category !== state.category) return false;
-    if (state.chain !== 'all' && r.chains.indexOf(state.chain) < 0) return false;
-    if (q && r.name.toLowerCase().indexOf(q) < 0 && r.slug.indexOf(q) < 0) return false;
-    return true;
-  });
-}
-
-/* ------------------------------------------------------------ rendering */
-
-function badge(r) {
-  return r.status === 'watchlist'
-    ? '<span class="badge watch">WATCHLIST</span>'
-    : '<span class="badge early">PRE-TOKEN</span>';
-}
-
-function renderStats() {
-  var m = DATA.meta || {};
-  $('asof').textContent = m.as_of || '—';
-  $('stat-scanned').textContent = (m.scanned || 0).toLocaleString('en-US');
-  $('stat-pretoken').textContent = (m.pre_token || 0).toLocaleString('en-US');
-  $('stat-watch').textContent = (m.watchlist || 0).toLocaleString('en-US');
-  $('stat-rows').textContent = (m.rows || 0).toLocaleString('en-US');
-  $('stat-total').textContent = money(m.total_implied_usd || 0);
-}
-
-function renderBoard() {
-  var list = sortRows(filteredRows());
-  var body = $('rows');
-  $('count').innerHTML = 'Showing <b>' + list.length + '</b> of <b>' + ROWS.length +
-    '</b> ranked protocols' + (state.status !== 'all' ? ' — status: <b>' + esc(state.status) + '</b>' : '') +
-    (state.category !== 'all' ? ' — category: <b>' + esc(state.category) + '</b>' : '') +
-    (state.chain !== 'all' ? ' — chain: <b>' + esc(state.chain) + '</b>' : '') + '.';
-  if (list.length === 0) {
-    body.innerHTML = '<tr><td colspan="10" class="empty">Nothing matches those filters. Reset and try a wider net.</td></tr>';
-    return;
+  function $(id) { return document.getElementById(id); }
+  function money(n) {
+    if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
+    if (n >= 1e6) return '$' + (n / 1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return '$' + (n / 1e3).toFixed(1) + 'K';
+    return '$' + Math.round(n);
   }
-  body.innerHTML = list.map(function (r) {
-    var g = r.change_7d;
-    var gClass = g === null ? '' : g >= 0 ? 'pos' : 'neg';
-    var chains = r.chains[0] + (r.chains.length > 1 ? ' +' + (r.chains.length - 1) : '');
-    return '<tr data-slug="' + esc(r.slug) + '" aria-selected="' + (state.selected === r.slug) + '">' +
-      '<td class="num">' + r.rank + '</td>' +
-      '<td class="name"><b>' + esc(r.name) + '</b><span>' + esc(r.slug) + '</span></td>' +
-      '<td>' + badge(r) + '</td>' +
-      '<td>' + esc(r.category) + '</td>' +
-      '<td>' + esc(chains) + '</td>' +
-      '<td class="num">' + money(r.tvl_usd) + '</td>' +
-      '<td class="num ' + gClass + '">' + pct(g) + '</td>' +
-      '<td class="num">' + r.months_no_token.toFixed(1) + '</td>' +
-      '<td class="num"><b>' + money(r.implied_value_usd) + '</b></td>' +
-      '<td class="num">~$' + r.farm_cost_usd.toFixed(2) + '</td>' +
-      '</tr>';
-  }).join('');
-  body.querySelectorAll('tr[data-slug]').forEach(function (tr) {
-    tr.addEventListener('click', function () { select(tr.getAttribute('data-slug'), true); });
-  });
-}
-
-function renderDetail() {
-  var box = $('detail');
-  var r = state.selected ? BY_SLUG[state.selected] : null;
-  if (!r) { box.hidden = true; box.innerHTML = ''; return; }
-  var check = impliedValue(r.tvl_usd, r.change_7d, r.months_no_token, r.chains.length);
-  var match = check.value === r.implied_value_usd ? 'matches the board' : 'differs from the board by ' + money(Math.abs(check.value - r.implied_value_usd));
-  var b = r.value_breakdown;
-  box.innerHTML =
-    '<header><div><span class="slug">Detail · rank #' + r.rank + ' · ' + esc(r.slug) + '</span>' +
-    '<h2>' + esc(r.name) + '</h2><p>' + badge(r) + ' ' + esc(r.category) + ' · ' + esc(r.chains.join(', ')) + '</p></div>' +
-    '<button class="close" type="button" id="close-detail">Close ✕</button></header>' +
-    '<div class="factors">' +
-    '<div class="factor"><b>' + money(r.tvl_usd) + '</b><span>TVL × ' + b.multiple.toFixed(2) + ' multiple</span><small>Size multiple: 0.55 under $100m, 0.38 to $1b, 0.26 above</small></div>' +
-    '<div class="factor"><b>×' + b.growth_factor.toFixed(2) + '</b><span>Growth factor</span><small>7-day TVL change ' + pct(r.change_7d) + ', clamped to −50…+120%</small></div>' +
-    '<div class="factor"><b>×' + b.age_factor.toFixed(2) + '</b><span>Age factor</span><small>' + r.months_no_token.toFixed(1) + ' months with no token recorded</small></div>' +
-    '<div class="factor"><b>×' + b.breadth_factor.toFixed(2) + '</b><span>Breadth factor</span><small>' + r.chains.length + ' chain' + (r.chains.length === 1 ? '' : 's') + '</small></div>' +
-    '</div>' +
-    '<p class="plan-cost">Implied value <b>' + money(r.implied_value_usd) + '</b> — recomputed from the row&rsquo;s own numbers as ' +
-    money(check.value) + ', which ' + match + '. Whole 7-step farm plan: about <b>$' + r.farm_cost_usd.toFixed(2) +
-    '</b> of gas in total, roughly 2 hours spread over 4 weeks.</p>' +
-    '<ol class="steps">' + r.farm_steps.map(function (s) { return '<li>' + esc(s) + '</li>'; }).join('') + '</ol>';
-  box.hidden = false;
-  $('close-detail').addEventListener('click', function () { select(null, true); });
-}
-
-function renderComps() {
-  var list = DATA.comparables || [];
-  $('comps').innerHTML = list.map(function (c) {
-    return '<tr><td class="name"><b>' + esc(c.name) + '</b><span>' + esc(c.slug) + '</span></td>' +
-      '<td>' + esc(c.symbol || '—') + '</td>' +
-      '<td class="num">' + money(c.mcap_usd) + '</td>' +
-      '<td class="num">' + money(c.tvl_usd) + '</td>' +
-      '<td class="num">' + c.mcap_per_tvl.toFixed(2) + '×</td></tr>';
-  }).join('');
-}
-
-/* ------------------------------------------------------------ selection + hash */
-
-function select(slug, scroll) {
-  state.selected = slug && BY_SLUG[slug] ? slug : null;
-  renderBoard();
-  renderDetail();
-  if (state.selected) {
-    try {
-      history.replaceState(null, '', '#detail=' + state.selected);
-    } catch (e) { /* file pages may refuse history edits; the view still works */ }
-    if (scroll) $('detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
-  } else {
-    try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { /* ignore */ }
+  function pct(n, digits) { return (n * 100).toFixed(digits === undefined ? 1 : digits) + '%'; }
+  function ageText(d) {
+    if (d === null || d === undefined) return '—';
+    if (d < 365) return Math.round(d / 30) + ' mo';
+    return (d / 365).toFixed(1) + ' y';
   }
-}
+  function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 
-function readHash() {
-  var hash = location.hash.replace(/^#/, '');
-  hash.split('&').forEach(function (part) {
-    var kv = part.split('=');
-    if (kv[0] === 'detail' && kv[1]) state.selected = decodeURIComponent(kv[1]);
-    if (kv[0] === 'status' && (kv[1] === 'watchlist' || kv[1] === 'early')) state.status = kv[1];
-    if (kv[0] === 'sort') state.sort = kv[1];
-  });
-}
+  // ---- header + KPIs -------------------------------------------------
+  $('asof').textContent = 'Snapshot ' + R.as_of + ' · floor ' + money(R.floor_usd) + ' · model ' + R.model_version;
+  var farmN = R.rows.filter(function (r) { return r.verdict === 'FARM'; }).length;
+  var med = R.rows.slice().sort(function (a, b) { return a.implied_value_usd - b.implied_value_usd; })[Math.floor(R.rows.length / 2)].implied_value_usd;
+  var kpis = [
+    [R.board_size, 'protocols ranked — all that record no token'],
+    [R.watchlist_size, 'on the watchlist (all covered)'],
+    [farmN, 'FARM verdicts'],
+    [money(med), 'median implied value'],
+    [R.fit.comps, 'traded comps fitted'],
+    [pct(R.validation.heldOutMedianApe, 0), 'held-out median error'],
+  ];
+  $('kpis').innerHTML = kpis.map(function (k) {
+    return '<div class="kpi"><b>' + k[0] + '</b><span>' + k[1] + '</span></div>';
+  }).join('');
 
-/* ------------------------------------------------------------ events + init */
+  // ---- fit + validation panel ----------------------------------------
+  $('fittext').textContent =
+    'fitCompsCurve fits log market cap on log TVL, 7d growth, log age and a category dummy, ' +
+    'ridge-regularised, on the snapshot\u2019s ' + R.fit.comps + ' traded protocols — no multiple is hand-picked. ' +
+    'impliedValueFromComps then prices each pre-token protocol from that curve; ' +
+    'tokenOddsByAge gives the empirical token rate for its age bucket.';
+  var fitRows = R.fit.columns.map(function (col, i) {
+    return '<tr><td>' + esc(col) + '</td><td class="num">' + R.fit.beta[i].toFixed(3) + '</td></tr>';
+  }).join('');
+  $('fittable').innerHTML = '<tr><th>Term</th><th class="num">Coefficient</th></tr>' + fitRows;
+  $('fitnote').textContent =
+    'Log TVL is centred at ' + R.fit.log_tvl_centre.toFixed(2) + '. R\u00B2 ' + R.fit.r_squared.toFixed(3) +
+    '; residual \u03C3 ' + R.fit.sigma.toFixed(2) + ' in log points, so P10–P90 spans \u00D7' +
+    Math.exp(-1.2816 * R.fit.sigma).toFixed(2) + ' to \u00D7' + Math.exp(1.2816 * R.fit.sigma).toFixed(1) + '.';
+  var v = R.validation;
+  $('validtable').innerHTML =
+    '<tr><th>Check</th><th class="num">Median error</th><th class="num">Mean error</th></tr>' +
+    '<tr><td>Held out (' + v.heldOutN + ' comps)</td><td class="num">' + pct(v.heldOutMedianApe) + '</td><td class="num">' + pct(v.heldOutMeanApe) + '</td></tr>' +
+    '<tr><td>Leave-one-out (' + R.fit.comps + ' refits)</td><td class="num">' + pct(v.looMedianApe) + '</td><td class="num">' + pct(v.looMeanApe) + '</td></tr>' +
+    '<tr><td colspan="3" style="color:var(--muted)">Error is |predicted mcap \u2212 actual mcap| / actual mcap. ' + esc(v.splitRule) + '.</td></tr>';
+  $('oddstable').innerHTML = '<tr><th>Age since listing</th><th class="num">Protocols</th><th class="num">With token</th><th class="num">Odds</th></tr>' +
+    R.odds_buckets.map(function (b) {
+      return '<tr><td>' + esc(b.label) + '</td><td class="num">' + b.protocols + '</td><td class="num">' + b.withToken + '</td><td class="num">' + pct(b.odds) + '</td></tr>';
+    }).join('') +
+    '<tr><td>Overall (all ' + R.protocols_total + ' protocols)</td><td class="num">—</td><td class="num">—</td><td class="num">' + pct(R.odds_overall) + '</td></tr>';
+  $('verdictrule').textContent = 'Verdict rule: ' + R.verdict_rule;
 
-function bind() {
-  $('q').addEventListener('input', function (e) { state.q = e.target.value; renderBoard(); });
-  $('status').addEventListener('change', function (e) { state.status = e.target.value; renderBoard(); });
-  $('category').addEventListener('change', function (e) { state.category = e.target.value; renderBoard(); });
-  $('chain').addEventListener('change', function (e) { state.chain = e.target.value; renderBoard(); });
-  $('sort').addEventListener('change', function (e) { state.sort = e.target.value; renderBoard(); });
-  $('reset').addEventListener('click', function () {
-    state.q = ''; state.status = 'all'; state.category = 'all'; state.chain = 'all'; state.sort = 'rank';
-    $('q').value = ''; $('status').value = 'all'; $('category').value = 'all'; $('chain').value = 'all'; $('sort').value = 'rank';
-    select(null, false);
-  });
-  document.querySelectorAll('th button[data-sort]').forEach(function (btn) {
-    btn.addEventListener('click', function () {
-      var key = btn.getAttribute('data-sort');
-      state.sort = key === 'rank' ? 'rank' : key === 'name' ? 'name' : key;
-      $('sort').value = state.sort === 'value' ? 'rank' : state.sort;
-      renderBoard();
+  // ---- board ---------------------------------------------------------
+  var cats = [];
+  R.rows.forEach(function (r) { if (r.category && cats.indexOf(r.category) < 0) cats.push(r.category); });
+  cats.sort();
+  $('cat').innerHTML = '<option value="">All categories</option>' + cats.map(function (c) { return '<option>' + esc(c) + '</option>'; }).join('');
+
+  function visibleRows() {
+    var q = $('q').value.trim().toLowerCase();
+    var cat = $('cat').value;
+    var ver = $('verdict').value;
+    var watch = $('watchonly').checked;
+    var list = R.rows.filter(function (r) {
+      if (q && (r.name.toLowerCase().indexOf(q) < 0 && r.slug.indexOf(q) < 0)) return false;
+      if (cat && r.category !== cat) return false;
+      if (ver && r.verdict !== ver) return false;
+      if (watch && !r.watchlist) return false;
+      return true;
     });
-  });
-}
+    var sort = $('sort').value;
+    var key = { implied: 'implied_value_usd', expected: 'expected_value_usd', odds: 'token_odds', tvl: 'tvl_usd', growth: 'change_7d' }[sort];
+    list.sort(function (a, b) {
+      var av = a[key] === null || a[key] === undefined ? -Infinity : a[key];
+      var bv = b[key] === null || b[key] === undefined ? -Infinity : b[key];
+      return bv - av || a.rank - b.rank;
+    });
+    return list;
+  }
 
-fillSelect('category', CATEGORIES);
-fillSelect('chain', CHAINS);
-readHash();
-$('status').value = state.status;
-if (state.sort) $('sort').value = state.sort === 'value' ? 'rank' : state.sort;
-renderStats();
-renderBoard();
-renderDetail();
-renderComps();
-bind();
-if (state.selected) $('detail').scrollIntoView({ block: 'start' });
+  function renderBoard() {
+    var list = visibleRows();
+    $('count').textContent = list.length + ' of ' + R.rows.length + ' shown';
+    $('rows').innerHTML = list.map(function (r) {
+      var g = r.change_7d === null ? '—' : (r.change_7d > 0 ? '+' : '') + r.change_7d.toFixed(1) + '%';
+      return '<tr data-slug="' + esc(r.slug) + '">' +
+        '<td class="num">' + r.rank + '</td>' +
+        '<td>' + esc(r.name) + (r.watchlist ? '<span class="wl">WL</span>' : '') + '</td>' +
+        '<td>' + esc(r.category || '—') + '</td>' +
+        '<td>' + esc(r.chains.slice(0, 2).join(', ')) + (r.chains.length > 2 ? ' +' + (r.chains.length - 2) : '') + '</td>' +
+        '<td class="num">' + money(r.tvl_usd) + '</td>' +
+        '<td class="num">' + g + '</td>' +
+        '<td class="num">' + ageText(r.age_days) + '</td>' +
+        '<td class="num"><b>' + money(r.implied_value_usd) + '</b></td>' +
+        '<td class="num">' + money(r.implied_p10_usd) + '–' + money(r.implied_p90_usd) + '</td>' +
+        '<td class="num">' + pct(r.token_odds, 0) + '</td>' +
+        '<td class="num">' + money(r.expected_value_usd) + '</td>' +
+        '<td><span class="badge ' + r.verdict + '">' + r.verdict + '</span></td>' +
+        '<td class="num">$' + r.farm_cost_usd + ' / ' + r.farm_days + 'd</td></tr>';
+    }).join('');
+  }
+
+  // ---- detail view ---------------------------------------------------
+  var current = null;
+  function showDetail(slug) {
+    var r = null;
+    for (var i = 0; i < R.rows.length; i++) if (R.rows[i].slug === slug) { r = R.rows[i]; break; }
+    if (!r) return;
+    current = r;
+    document.body.classList.add('detail-mode');
+    $('detail').hidden = false;
+    $('dname').textContent = '#' + r.rank + ' ' + r.name + ' — implied ' + money(r.implied_value_usd) +
+      ' (P10 ' + money(r.implied_p10_usd) + ' – P90 ' + money(r.implied_p90_usd) + ')';
+    $('dmeta').textContent = (r.category || 'Uncategorised') + ' · ' + r.chains.join(', ') + ' · TVL ' + money(r.tvl_usd) +
+      ' · 7d ' + (r.change_7d === null ? '—' : r.change_7d.toFixed(1) + '%') + ' · listed ' + (r.listed_at || 'unknown') +
+      ' · token odds ' + pct(r.token_odds, 0) + ' · expected ' + money(r.expected_value_usd) +
+      ' · verdict ' + r.verdict + (r.watchlist ? ' · on the watchlist' : '');
+    var m = r.model;
+    var parts = [['Intercept', m.intercept], ['TVL (log TVL + square)', m.tvl], ['7d growth', m.growth], ['Age since listing', m.age], ['Category', m.category]];
+    $('dfactors').innerHTML = '<tr><th>Factor</th><th class="num">Log points</th><th class="num">× value</th></tr>' +
+      parts.map(function (p) { return '<tr><td>' + p[0] + '</td><td class="num">' + p[1].toFixed(2) + '</td><td class="num">' + (p[0] === 'Intercept' ? '—' : '×' + Math.exp(p[1]).toFixed(2)) + '</td></tr>'; }).join('') +
+      '<tr><td><b>Fitted log mcap</b></td><td class="num"><b>' + (m.intercept + m.tvl + m.growth + m.age + m.category).toFixed(2) + '</b></td><td class="num"><b>' + money(r.implied_value_usd) + '</b></td></tr>';
+    var same = R.live.filter(function (c) { return c.category === r.category; });
+    var comps = (same.length >= 3 ? same : R.live).slice(0, 5);
+    $('dcompshead').textContent = same.length >= 3
+      ? 'Nearest traded comps in this category'
+      : 'Traded comps — too few in this category, so the largest traded comps overall';
+    $('dcomps').innerHTML = '<tr><th>Traded comp</th><th class="num">Market cap</th><th class="num">TVL</th><th class="num">Mcap/TVL</th></tr>' +
+      comps.map(function (c) {
+        return '<tr><td>' + esc(c.name) + '</td><td class="num">' + money(c.mcap_usd) + '</td><td class="num">' + money(c.tvl_usd) + '</td><td class="num">' + (c.mcap_usd / c.tvl_usd).toFixed(2) + '×</td></tr>';
+      }).join('');
+    $('dcost').textContent = '$' + r.farm_cost_usd + ' total, about ' + r.farm_days + ' days';
+    $('dsteps').innerHTML = r.farm_steps.map(function (s) { return '<li>' + esc(s) + '</li>'; }).join('');
+    document.querySelectorAll('#rows tr').forEach(function (tr) { tr.classList.toggle('sel', tr.getAttribute('data-slug') === slug); });
+    $('detail').scrollIntoView({ block: 'start' });
+  }
+  function hideDetail() { $('detail').hidden = true; document.body.classList.remove('detail-mode'); current = null; }
+  $('rows').addEventListener('click', function (e) {
+    var tr = e.target.closest('tr');
+    if (!tr) return;
+    location.hash = 'detail=' + tr.getAttribute('data-slug');
+  });
+  $('closedetail').addEventListener('click', function () { history.replaceState(null, '', location.pathname); hideDetail(); });
+
+  // ---- traded comps table --------------------------------------------
+  $('liverows').innerHTML = R.live.map(function (c) {
+    return '<tr><td>' + esc(c.name) + '</td><td>' + esc(c.category || '—') + '</td><td>' +
+      esc(c.chains.slice(0, 2).join(', ')) + '</td><td class="num">' + money(c.tvl_usd) + '</td>' +
+      '<td class="num">' + money(c.mcap_usd) + '</td><td class="num">' + (c.mcap_usd / c.tvl_usd).toFixed(2) + '×</td>' +
+      '<td class="num">' + (c.change_7d === null ? '—' : c.change_7d.toFixed(1) + '%') + '</td></tr>';
+  }).join('');
+  $('src').textContent = 'Source: ' + R.source + '.';
+
+  // ---- controls + hash routing ---------------------------------------
+  function applyHash() {
+    var h = location.hash.slice(1);
+    var params = {};
+    h.split('&').forEach(function (kv) { var p = kv.split('='); if (p[0]) params[p[0]] = decodeURIComponent(p[1] || ''); });
+    if (params.verdict) $('verdict').value = params.verdict;
+    if (params.cat) $('cat').value = params.cat;
+    if (params.q) $('q').value = params.q;
+    if (params.sort) $('sort').value = params.sort;
+    if (params.watch) $('watchonly').checked = params.watch === '1';
+    renderBoard();
+    if (params.detail) showDetail(params.detail); else hideDetail();
+  }
+  ['q', 'cat', 'verdict', 'watchonly', 'sort'].forEach(function (id) {
+    $(id).addEventListener('input', renderBoard);
+    $(id).addEventListener('change', renderBoard);
+  });
+  window.addEventListener('hashchange', applyHash);
+  applyHash();
+})();
